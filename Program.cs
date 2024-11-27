@@ -8,7 +8,6 @@ namespace Quarto;
 
 static class Program
 {
-
     static void Main()
     {
         CanonizeTest.CollisionTest(10, 10);

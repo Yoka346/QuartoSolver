@@ -22,6 +22,7 @@ static class CanonizeTest
             TT.Clear();
             Search(ref pos, ref pieces, ref empties, depth);
             Console.WriteLine($"{NodeCount} nodes");
+            Console.WriteLine($"{CanonicalPosition.CollisionCount} collisions");
         }
     }
 

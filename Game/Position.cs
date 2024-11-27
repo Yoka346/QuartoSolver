@@ -134,7 +134,13 @@ public unsafe struct CanonicalPosition
 
     public static int Length => LEN;
     
-    static readonly ulong[][] HASH_RAND = new ulong[LEN * 2][]; 
+    static readonly ulong[][] HASH_RAND = new ulong[LEN * 2][];
+
+#if DEBUG
+    static readonly Dictionary<int, CanonicalPosition> HashAndCanPos = [];
+    static long _CollisionCount = 0;
+    public static long CollisionCount => _CollisionCount;
+#endif
 
     public uint this[int idx] 
     {
@@ -181,11 +187,9 @@ public unsafe struct CanonicalPosition
             fixed(uint* v = this.values)
             {
                 var values = (ushort*)v;
-
                 var hashCode = 0UL;
                 for(var i = 0; i < HASH_RAND.Length; i++)
                     hashCode ^= HASH_RAND[i][values[i] & 0xffff];
-
                 return hashCode;
             }
         }
@@ -194,15 +198,26 @@ public unsafe struct CanonicalPosition
         {
             var values = (ulong*)v;
             var crc = 0UL;
-            for(var i = 1; i < LEN / 2; i++)
+            for(var i = 0; i < LEN / 2; i++)
                 crc = ComputeCrc32(crc, values[i]);
             crc = ComputeCrc32(crc, this.values[LEN - 1]);
-
             return crc;
         }
     }
 
-    public override readonly int GetHashCode() => (int)CalcHashCode();
+    public override readonly int GetHashCode()
+    {
+        var hash = (int)CalcHashCode();
+
+#if DEBUG
+        if(HashAndCanPos.TryGetValue(hash, out var canPos) && canPos != this)
+            _CollisionCount++;
+        else
+            HashAndCanPos[hash] = this;
+#endif
+
+        return hash;
+    }
 
     public override readonly bool Equals([NotNullWhen(true)] object? obj)
     {
@@ -243,8 +258,6 @@ public unsafe struct Position
     static readonly ushort[] MIRROR;
     static readonly ushort[] MID_FLIP;
     static readonly ushort[] INSIDE_OUT;
-
-    static readonly ushort[] PATTERN_ID;
 
     static ReadOnlySpan<int> MID_FLIP_TRANSFORMER => 
     [
@@ -303,8 +316,6 @@ public unsafe struct Position
             INSIDE_OUT[pattern] = Transform(pattern, (x, y) => { var coord = INSIDE_OUT_TRANSFORMER[x + y * BOARD_SIZE]; return (coord % BOARD_SIZE, coord / BOARD_SIZE); });
         }
 
-        PATTERN_ID = Enumerable.Range(0, ushort.MaxValue + 1).Select(pat => EnumerateSymmetricPatterns((ushort)pat).Min()).ToArray();
-
         static bool IsQuarto(ushort pattern, ushort mask, int shiftWidth, int numShifts)
         {
             for(var i = 0; i < numShifts; i++)
@@ -330,32 +341,6 @@ public unsafe struct Position
                     mask <<= 1;
                 }
             return transformed;
-        }
-
-        static IEnumerable<ushort> EnumerateSymmetricPatterns(ushort pattern)
-        {
-            for(var rotCount = 0; rotCount < 4; rotCount++)
-            {
-                var rotated = pattern;
-                for(var i = 0; i < rotCount; i++)
-                    rotated = ROTATE[rotated];
-
-                for(var bits = 0; bits < 8; bits++)
-                {
-                    var transformed = rotated;
-
-                    if((bits & 1) != 0)
-                        transformed = MIRROR[transformed];
-                    
-                    if((bits & (1 << 1)) != 0)
-                        transformed = MID_FLIP[transformed];
-
-                    if((bits & (1 << 2)) != 0)
-                        transformed = INSIDE_OUT[transformed];
-
-                    yield return transformed;
-                }
-            }
         }
     }
 
