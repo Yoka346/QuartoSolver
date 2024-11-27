@@ -8,11 +8,7 @@ using Quarto.Game;
 
 struct TTEntry
 {
-#if DEBUG
-    public Position OriginalPos = new();
-#endif
-
-    public CanonicalPosition Position;
+    //public CanonicalPosition Position;
     public short Lower;
     public short Upper;
 

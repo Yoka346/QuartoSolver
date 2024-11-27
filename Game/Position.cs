@@ -5,11 +5,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using System.Numerics;
-using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 using System.Text;
+
 using Quarto.Utils;
 
 using static QuartoConstants;
@@ -137,7 +136,7 @@ public unsafe struct CanonicalPosition
     static readonly ulong[][] HASH_RAND = new ulong[LEN * 2][];
 
 #if DEBUG
-    static readonly Dictionary<int, CanonicalPosition> HashAndCanPos = [];
+    static readonly Dictionary<int, List<CanonicalPosition>> HashAndCanPos = [];
     static long _CollisionCount = 0;
     public static long CollisionCount => _CollisionCount;
 #endif
@@ -210,10 +209,13 @@ public unsafe struct CanonicalPosition
         var hash = (int)CalcHashCode();
 
 #if DEBUG
-        if(HashAndCanPos.TryGetValue(hash, out var canPos) && canPos != this)
-            _CollisionCount++;
+        if(HashAndCanPos.TryGetValue(hash, out var canPosList))
+        {
+            var p = this;
+            _CollisionCount += canPosList.Count(x => x != p);
+        }
         else
-            HashAndCanPos[hash] = this;
+            HashAndCanPos[hash] = [this];
 #endif
 
         return hash;
@@ -376,30 +378,48 @@ public unsafe struct Position
     public void Update(int coord)
     {
         var piece = this.PieceToBePut;
-        this.lightHollowTallRound[0] |= (ushort)((int)(piece & PieceProperty.Color) << coord);
-        this.lightHollowTallRound[1] |= (ushort)(((int)(piece & PieceProperty.Hollow) << coord) >> 1);
-        this.lightHollowTallRound[2] |= (ushort)(((int)(piece & PieceProperty.Height) << coord) >> 2);
-        this.lightHollowTallRound[3] |= (ushort)(((int)(piece & PieceProperty.Shape) << coord) >> 3);
+        this.lightHollowTallRound[0] |= (ushort)((uint)(piece & PieceProperty.Color) << coord);
+        this.lightHollowTallRound[1] |= (ushort)(((uint)(piece & PieceProperty.Hollow) << coord) >> 1);
+        this.lightHollowTallRound[2] |= (ushort)(((uint)(piece & PieceProperty.Height) << coord) >> 2);
+        this.lightHollowTallRound[3] |= (ushort)(((uint)(piece & PieceProperty.Shape) << coord) >> 3);
 
         piece = (~piece) & PieceProperty.Mask;
-        this.darkSolidShortSquare[0] |= (ushort)((int)(piece & PieceProperty.Color) << coord);
-        this.darkSolidShortSquare[1] |= (ushort)(((int)(piece & PieceProperty.Hollow) << coord) >> 1);
-        this.darkSolidShortSquare[2] |= (ushort)(((int)(piece & PieceProperty.Height) << coord) >> 2);
-        this.darkSolidShortSquare[3] |= (ushort)(((int)(piece & PieceProperty.Shape) << coord) >> 3);
+        this.darkSolidShortSquare[0] |= (ushort)((uint)(piece & PieceProperty.Color) << coord);
+        this.darkSolidShortSquare[1] |= (ushort)(((uint)(piece & PieceProperty.Hollow) << coord) >> 1);
+        this.darkSolidShortSquare[2] |= (ushort)(((uint)(piece & PieceProperty.Height) << coord) >> 2);
+        this.darkSolidShortSquare[3] |= (ushort)(((uint)(piece & PieceProperty.Shape) << coord) >> 3);
+
+#if DEBUG
+        for(var i = 0; i < 4; i++)
+        {
+            var m = this.lightHollowTallRound[i];
+            var n = this.darkSolidShortSquare[i];
+            Debug.Assert((m == 0 && n == 0) || (m & n) == 0);
+        }
+#endif
     }
 
     public void Undo(PieceProperty piece, int coord)
     {
-        this.lightHollowTallRound[0] ^= (ushort)((int)(piece & PieceProperty.Color) << coord);
-        this.lightHollowTallRound[1] ^= (ushort)(((int)(piece & PieceProperty.Hollow) << coord) >> 1);
-        this.lightHollowTallRound[2] ^= (ushort)(((int)(piece & PieceProperty.Height) << coord) >> 2);
-        this.lightHollowTallRound[3] ^= (ushort)(((int)(piece & PieceProperty.Shape) << coord) >> 3);
+        this.lightHollowTallRound[0] ^= (ushort)((uint)(piece & PieceProperty.Color) << coord);
+        this.lightHollowTallRound[1] ^= (ushort)(((uint)(piece & PieceProperty.Hollow) << coord) >> 1);
+        this.lightHollowTallRound[2] ^= (ushort)(((uint)(piece & PieceProperty.Height) << coord) >> 2);
+        this.lightHollowTallRound[3] ^= (ushort)(((uint)(piece & PieceProperty.Shape) << coord) >> 3);
 
         piece = (~piece) & PieceProperty.Mask;
-        this.darkSolidShortSquare[0] ^= (ushort)((int)(piece & PieceProperty.Color) << coord);
-        this.darkSolidShortSquare[1] ^= (ushort)(((int)(piece & PieceProperty.Hollow) << coord) >> 1);
-        this.darkSolidShortSquare[2] ^= (ushort)(((int)(piece & PieceProperty.Height) << coord) >> 2);
-        this.darkSolidShortSquare[3] ^= (ushort)(((int)(piece & PieceProperty.Shape) << coord) >> 3);
+        this.darkSolidShortSquare[0] ^= (ushort)((uint)(piece & PieceProperty.Color) << coord);
+        this.darkSolidShortSquare[1] ^= (ushort)(((uint)(piece & PieceProperty.Hollow) << coord) >> 1);
+        this.darkSolidShortSquare[2] ^= (ushort)(((uint)(piece & PieceProperty.Height) << coord) >> 2);
+        this.darkSolidShortSquare[3] ^= (ushort)(((uint)(piece & PieceProperty.Shape) << coord) >> 3);
+
+#if DEBUG
+        for(var i = 0; i < 4; i++)
+        {
+            var m = this.lightHollowTallRound[i];
+            var n = this.darkSolidShortSquare[i];
+            Debug.Assert((m == 0 && n == 0) || (m & n) == 0);
+        }
+#endif
     }
 
     public readonly CanonicalPosition GetCanonicalPosition()
