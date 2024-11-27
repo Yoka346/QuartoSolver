@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 using System.Text;
@@ -28,7 +29,8 @@ public enum PieceProperty : sbyte
     Hollow = 1 << 1,
     Height = 1 << 2,
     Shape = 1 << 3,
-    Mask = 0xf
+    Mask = 0xf,
+    Null = 1 << 4
 }
 
 public unsafe struct LinkedList16
@@ -128,13 +130,13 @@ public readonly struct Move(PieceProperty piece, int coord)
 
 public unsafe struct CanonicalPosition
 {
-    const int LEN = 9;
+    const int LEN = 5;
 
     public static int Length => LEN;
     
-    static readonly ulong[][] HASH_RAND = new ulong[LEN][]; 
+    static readonly ulong[][] HASH_RAND = new ulong[LEN * 2][]; 
 
-    public ushort this[int idx] 
+    public uint this[int idx] 
     {
         readonly get
         {
@@ -149,7 +151,7 @@ public unsafe struct CanonicalPosition
         }
     }
 
-    fixed ushort values[LEN];
+    fixed uint values[LEN];
 
     static CanonicalPosition()
     {
@@ -167,11 +169,7 @@ public unsafe struct CanonicalPosition
             && lhs.values[1] == rhs.values[1]
             && lhs.values[2] == rhs.values[2]
             && lhs.values[3] == rhs.values[3]
-            && lhs.values[4] == rhs.values[4]
-            && lhs.values[5] == rhs.values[5]
-            && lhs.values[6] == rhs.values[6]
-            && lhs.values[7] == rhs.values[7]
-            && lhs.values[8] == rhs.values[8];
+            && lhs.values[4] == rhs.values[4];
     }
 
     public static bool operator!=(CanonicalPosition lhs, CanonicalPosition rhs) => !(lhs == rhs);
@@ -180,18 +178,27 @@ public unsafe struct CanonicalPosition
     {
         if(!Sse42.IsSupported && !Crc32.IsSupported)
         {
-            var hashCode = 0UL;
-            for(var i = 0; i < HASH_RAND.Length; i++)
-                hashCode ^= HASH_RAND[i][this[i]];
-            return hashCode;
+            fixed(uint* v = this.values)
+            {
+                var values = (ushort*)v;
+
+                var hashCode = 0UL;
+                for(var i = 0; i < HASH_RAND.Length; i++)
+                    hashCode ^= HASH_RAND[i][values[i] & 0xffff];
+
+                return hashCode;
+            }
         }
 
-        fixed(ushort* values = this.values)
+        fixed(uint* v = this.values)
         {
-            var crc32 = ComputeCrc32(0u, *(ulong*)values);
-            crc32 = (crc32 << 32) | ComputeCrc32((uint)crc32, *((ulong*)values + 1));
-            crc32 = (crc32 << 32) | ComputeCrc32((uint)crc32, values[LEN - 1]);
-            return crc32;
+            var values = (ulong*)v;
+            var crc = 0UL;
+            for(var i = 1; i < LEN / 2; i++)
+                crc = ComputeCrc32(crc, values[i]);
+            crc = ComputeCrc32(crc, this.values[LEN - 1]);
+
+            return crc;
         }
     }
 
@@ -209,26 +216,26 @@ public unsafe struct CanonicalPosition
     }
 
     public override readonly string ToString() 
-    => $"{values[0]},  {values[1]},  {values[2]},  {values[3]},  {values[4]},  {values[5]},  {values[6]},  {values[7]},  {values[8]}";
+    => $"{values[0]},  {values[1]},  {values[2]},  {values[3]},  {values[4]}";
 
-    static ulong ComputeCrc32(uint crc, ulong data)
+    static ulong ComputeCrc32(ulong crc, ulong data)
     {
         if(Crc32.IsSupported)
         {
             if(Crc32.Arm64.IsSupported)
-                return Crc32.Arm64.ComputeCrc32(crc, data);
+                return Crc32.Arm64.ComputeCrc32((uint)crc, data);
             else
-                return Crc32.ComputeCrc32(Crc32.ComputeCrc32(crc, (uint)data), (uint)(data >> 32));
+                return Crc32.ComputeCrc32(Crc32.ComputeCrc32((uint)crc, (uint)data), (uint)(data >> 32));
         }
 
         if (Sse42.X64.IsSupported)
                 return Sse42.X64.Crc32(crc, data);
             
-        return Sse42.Crc32(Sse42.Crc32(crc, (uint)data), (uint)(data >> 32));
+        return Sse42.Crc32(Sse42.Crc32((uint)crc, (uint)data), (uint)(data >> 32));
     }
 }
 
-public struct Position
+public unsafe struct Position
 {
     static readonly bool[] IS_QUARTO;
 
@@ -238,7 +245,6 @@ public struct Position
     static readonly ushort[] INSIDE_OUT;
 
     static readonly ushort[] PATTERN_ID;
-
 
     static ReadOnlySpan<int> MID_FLIP_TRANSFORMER => 
     [
@@ -256,18 +262,19 @@ public struct Position
          9,   8, 11, 10, 
     ];
 
-    public readonly bool IsQuarto => IS_QUARTO[this.lightHollowTallRound & 0xffff]
-                                    || IS_QUARTO[(this.lightHollowTallRound >> NUM_SQUARES) & 0xffff]
-                                    || IS_QUARTO[(this.lightHollowTallRound >> (NUM_SQUARES * 2)) & 0xffff]
-                                    || IS_QUARTO[(this.lightHollowTallRound >> (NUM_SQUARES * 3)) & 0xffff]
-                                    || IS_QUARTO[this.darkSolidShortSquare & 0xffff]
-                                    || IS_QUARTO[(this.darkSolidShortSquare >> NUM_SQUARES) & 0xffff]
-                                    || IS_QUARTO[(this.darkSolidShortSquare >> (NUM_SQUARES * 2)) & 0xffff]
-                                    || IS_QUARTO[(this.darkSolidShortSquare >> (NUM_SQUARES * 3)) & 0xfff];
+    public readonly bool IsQuarto => IS_QUARTO[this.lightHollowTallRound[0]]
+                                    || IS_QUARTO[this.lightHollowTallRound[1]]
+                                    || IS_QUARTO[this.lightHollowTallRound[2]]
+                                    || IS_QUARTO[this.lightHollowTallRound[3]]
+                                    || IS_QUARTO[this.darkSolidShortSquare[0]]
+                                    || IS_QUARTO[this.darkSolidShortSquare[1]]
+                                    || IS_QUARTO[this.darkSolidShortSquare[2]]
+                                    || IS_QUARTO[this.darkSolidShortSquare[3]];
 
-    ushort pieces = 0;
-    ulong lightHollowTallRound = 0;
-    ulong darkSolidShortSquare = 0;
+    public PieceProperty PieceToBePut { get; set; } = PieceProperty.Null;
+
+    fixed ushort lightHollowTallRound[4];
+    fixed ushort darkSolidShortSquare[4];
 
     static Position()
     {
@@ -297,8 +304,6 @@ public struct Position
         }
 
         PATTERN_ID = Enumerable.Range(0, ushort.MaxValue + 1).Select(pat => EnumerateSymmetricPatterns((ushort)pat).Min()).ToArray();
-
-        EnumerateSymmetricPatterns(25622).ToArray();
 
         static bool IsQuarto(ushort pattern, ushort mask, int shiftWidth, int numShifts)
         {
@@ -354,17 +359,16 @@ public struct Position
         }
     }
 
-    public Position() { }
-
-    // for debug
-    public Position(ulong lightHollowTallRound, ulong darkSolidShortSquare, ushort pieces)
+    public Position() 
     {
-        this.lightHollowTallRound = lightHollowTallRound;
-        this.darkSolidShortSquare = darkSolidShortSquare;
-        this.pieces = pieces;
+        for(var i = 0; i < 4; i++)
+            this.lightHollowTallRound[i] = this.darkSolidShortSquare[i] = 0;
     }
 
-    public static bool operator==(Position lhs, Position rhs) => lhs.pieces == rhs.pieces && lhs.lightHollowTallRound == rhs.lightHollowTallRound && lhs.darkSolidShortSquare == rhs.darkSolidShortSquare;
+    public static bool operator==(Position lhs, Position rhs) => lhs.PieceToBePut == rhs.PieceToBePut 
+                                                              && AreEqual(lhs.lightHollowTallRound, rhs.lightHollowTallRound) 
+                                                              && AreEqual(lhs.darkSolidShortSquare, rhs.darkSolidShortSquare);
+
     public static bool operator!=(Position lhs, Position rhs) => !(lhs == rhs);
 
     public override readonly bool Equals([NotNullWhen(true)] object? obj)
@@ -384,36 +388,33 @@ public struct Position
         return canPos.GetHashCode();
     }
 
-    public void Update(PieceProperty piece, int coord)
+    public void Update(int coord)
     {
-        this.pieces |= (ushort)(1 << coord);
-
-        this.lightHollowTallRound |= (ulong)(piece & PieceProperty.Color) << coord;
-        this.lightHollowTallRound |= (ulong)(piece & PieceProperty.Hollow) << (coord + NUM_SQUARES - 1);
-        this.lightHollowTallRound |= (ulong)(piece & PieceProperty.Height) << (coord + NUM_SQUARES * 2 - 2);
-        this.lightHollowTallRound |= (ulong)(piece & PieceProperty.Shape) << (coord + NUM_SQUARES * 3 - 3);
+        var piece = this.PieceToBePut;
+        this.lightHollowTallRound[0] |= (ushort)((int)(piece & PieceProperty.Color) << coord);
+        this.lightHollowTallRound[1] |= (ushort)(((int)(piece & PieceProperty.Hollow) << coord) >> 1);
+        this.lightHollowTallRound[2] |= (ushort)(((int)(piece & PieceProperty.Height) << coord) >> 2);
+        this.lightHollowTallRound[3] |= (ushort)(((int)(piece & PieceProperty.Shape) << coord) >> 3);
 
         piece = (~piece) & PieceProperty.Mask;
-        this.darkSolidShortSquare |= (ulong)(piece & PieceProperty.Color) << coord;
-        this.darkSolidShortSquare |= (ulong)(piece & PieceProperty.Hollow) << (coord + NUM_SQUARES - 1);
-        this.darkSolidShortSquare |= (ulong)(piece & PieceProperty.Height) << (coord + NUM_SQUARES * 2 - 2);
-        this.darkSolidShortSquare |= (ulong)(piece & PieceProperty.Shape) << (coord + NUM_SQUARES * 3 - 3);
+        this.darkSolidShortSquare[0] |= (ushort)((int)(piece & PieceProperty.Color) << coord);
+        this.darkSolidShortSquare[1] |= (ushort)(((int)(piece & PieceProperty.Hollow) << coord) >> 1);
+        this.darkSolidShortSquare[2] |= (ushort)(((int)(piece & PieceProperty.Height) << coord) >> 2);
+        this.darkSolidShortSquare[3] |= (ushort)(((int)(piece & PieceProperty.Shape) << coord) >> 3);
     }
 
     public void Undo(PieceProperty piece, int coord)
     {
-        this.pieces ^= (ushort)(1 << coord);
-
-        this.lightHollowTallRound ^= (ulong)(piece & PieceProperty.Color) << coord;
-        this.lightHollowTallRound ^= (ulong)(piece & PieceProperty.Hollow) << (coord + NUM_SQUARES - 1);
-        this.lightHollowTallRound ^= (ulong)(piece & PieceProperty.Height) << (coord + NUM_SQUARES * 2 - 2);
-        this.lightHollowTallRound ^= (ulong)(piece & PieceProperty.Shape) << (coord + NUM_SQUARES * 3 - 3);
+        this.lightHollowTallRound[0] ^= (ushort)((int)(piece & PieceProperty.Color) << coord);
+        this.lightHollowTallRound[1] ^= (ushort)(((int)(piece & PieceProperty.Hollow) << coord) >> 1);
+        this.lightHollowTallRound[2] ^= (ushort)(((int)(piece & PieceProperty.Height) << coord) >> 2);
+        this.lightHollowTallRound[3] ^= (ushort)(((int)(piece & PieceProperty.Shape) << coord) >> 3);
 
         piece = (~piece) & PieceProperty.Mask;
-        this.darkSolidShortSquare ^= (ulong)(piece & PieceProperty.Color) << coord;
-        this.darkSolidShortSquare ^= (ulong)(piece & PieceProperty.Hollow) << (coord + NUM_SQUARES - 1);
-        this.darkSolidShortSquare ^= (ulong)(piece & PieceProperty.Height) << (coord + NUM_SQUARES * 2 - 2);
-        this.darkSolidShortSquare ^= (ulong)(piece & PieceProperty.Shape) << (coord + NUM_SQUARES * 3 - 3);
+        this.darkSolidShortSquare[0] ^= (ushort)((int)(piece & PieceProperty.Color) << coord);
+        this.darkSolidShortSquare[1] ^= (ushort)(((int)(piece & PieceProperty.Hollow) << coord) >> 1);
+        this.darkSolidShortSquare[2] ^= (ushort)(((int)(piece & PieceProperty.Height) << coord) >> 2);
+        this.darkSolidShortSquare[3] ^= (ushort)(((int)(piece & PieceProperty.Shape) << coord) >> 3);
     }
 
     public readonly CanonicalPosition GetCanonicalPosition()
@@ -424,48 +425,116 @@ public struct Position
 
     public readonly void GetCanonicalPosition(out CanonicalPosition canonicalPos)
     {
-        const int MASK = 0xffff;
+        Span<ushort> rotatedLHTR = [this.lightHollowTallRound[0], this.lightHollowTallRound[1], this.lightHollowTallRound[2], this.lightHollowTallRound[3]];
+        Span<ushort> rotatedDSSS = [this.darkSolidShortSquare[0], this.darkSolidShortSquare[1], this.darkSolidShortSquare[2], this.darkSolidShortSquare[3]];
+        Span<ushort> transformedLHTR = stackalloc ushort[4];
+        Span<ushort> transformedDSSS = stackalloc ushort[4];
+        Span<uint> encodedPos = stackalloc uint[5];
+        encodedPos[0] = uint.MaxValue;
+        Span<uint> minEncodedPos = [uint.MaxValue, uint.MaxValue, uint.MaxValue, uint.MaxValue, uint.MaxValue];
+        var minCanonicalPiece = uint.MaxValue;
 
-        Span<ushort> patternIDs =
-        [
-            ushort.MaxValue,
-            PATTERN_ID[this.lightHollowTallRound & MASK],
-            PATTERN_ID[(this.lightHollowTallRound >> NUM_SQUARES) & MASK],
-            PATTERN_ID[(this.lightHollowTallRound >> (NUM_SQUARES * 2)) & MASK],
-            PATTERN_ID[(this.lightHollowTallRound >> (NUM_SQUARES * 3)) & MASK],
-            ushort.MaxValue,
-            PATTERN_ID[this.darkSolidShortSquare & MASK],
-            PATTERN_ID[(this.darkSolidShortSquare >> NUM_SQUARES) & MASK],
-            PATTERN_ID[(this.darkSolidShortSquare >> (NUM_SQUARES * 2)) & MASK],
-            PATTERN_ID[(this.darkSolidShortSquare >> (NUM_SQUARES * 3)) & MASK]
-        ];
+        var pieceToBePut = (uint)this.PieceToBePut;
 
-        for(var i = 1; i <= 4; i++)
+        for(var rotCount = 0; rotCount < 4; rotCount++)
         {
-            var j = i + 5;
-            if(patternIDs[i] < patternIDs[j])
-                (patternIDs[i], patternIDs[j]) = (patternIDs[j], patternIDs[i]); 
-        }
+            for(var i = 0; i < rotatedLHTR.Length; i++)
+                rotatedLHTR[i] = ROTATE[rotatedLHTR[i]];
 
-        // insertion sort
-        for(var i = 2; i <= 4; i++)
-        {
-            var tmp = (patternIDs[i], patternIDs[i + 5]);
-            if(patternIDs[i - 1] < tmp.Item1 || (patternIDs[i - 1] == tmp.Item1 && patternIDs[i + 4] < tmp.Item2))
+            for(var i = 0; i < rotatedDSSS.Length; i++)
+                rotatedDSSS[i] = ROTATE[rotatedDSSS[i]];
+
+            for(var bits = 0; bits < 8; bits++)
             {
-                var j = i;
-                do
+                rotatedLHTR.CopyTo(transformedLHTR);
+                rotatedDSSS.CopyTo(transformedDSSS);
+
+                if((bits & 1) != 0)
                 {
-                    (patternIDs[j], patternIDs[j + 5]) = (patternIDs[j - 1], patternIDs[j + 4]);
-                    j--;
-                } while (patternIDs[j - 1] < tmp.Item1 || (patternIDs[j - 1] == tmp.Item1 && patternIDs[j + 4] < tmp.Item2));
-                (patternIDs[j], patternIDs[j + 5]) = tmp;
+                    Transform(transformedLHTR, MIRROR);
+                    Transform(transformedDSSS, MIRROR);
+                }
+
+                if((bits & (1 << 1)) != 0)
+                {
+                    Transform(transformedLHTR, MID_FLIP);
+                    Transform(transformedDSSS, MID_FLIP);
+                }
+
+                if((bits & (1 << 2)) != 0)
+                {
+                    Transform(transformedLHTR, INSIDE_OUT);
+                    Transform(transformedDSSS, INSIDE_OUT);
+                }
+
+                var propFlipMask = 0u;
+                for(var i = 0; i < 4; i++)
+                {
+                    Debug.Assert((transformedLHTR[i] == 0 && transformedDSSS[i] == 0) || (transformedLHTR[i] != transformedDSSS[i]));
+
+                    if(transformedLHTR[i] <= transformedDSSS[i])
+                        encodedPos[i + 1] = (uint)(transformedLHTR[i] << NUM_SQUARES) | transformedDSSS[i];
+                    else
+                    {
+                        encodedPos[i + 1] = (uint)(transformedDSSS[i] << NUM_SQUARES) | transformedLHTR[i];
+                        propFlipMask |= 1u << i;
+                    }
+                }
+
+                var canonicalPiece = Sort(encodedPos, pieceToBePut ^ propFlipMask);
+                var comp = Compare(encodedPos, minEncodedPos);
+                if(comp == -1 || (comp == 0 && canonicalPiece < minCanonicalPiece))
+                {
+                    encodedPos.CopyTo(minEncodedPos);
+                    minCanonicalPiece = canonicalPiece;
+                }
             }
         }
 
-        canonicalPos[0] = PATTERN_ID[this.pieces];
-        for(var i = 0; i < 4; i++)
-            (canonicalPos[i + 1], canonicalPos[i + 5]) = (patternIDs[i + 1], patternIDs[i + 6]);
+        for(var i = 0; i < CanonicalPosition.Length - 1; i++)
+            canonicalPos[i] = minEncodedPos[i + 1];
+        canonicalPos[CanonicalPosition.Length - 1] = minCanonicalPiece;
+
+        static void Transform(Span<ushort> patterns, ushort[] table)
+        {
+            for(var i = 0; i < patterns.Length; i++)
+                patterns[i] = table[patterns[i]];
+        }
+
+        static uint Sort(Span<uint> encodedPos, uint pieceToBePut)
+        {
+            var canonicalPiece = pieceToBePut;
+            for(var i = 2; i < encodedPos.Length; i++)
+            {
+                var tmp = encodedPos[i];
+                if(encodedPos[i - 1] < tmp)
+                {
+                    var j = i;
+                    do
+                    {
+                        encodedPos[j] = encodedPos[j - 1];
+                        var mask = ((canonicalPiece >> 1) ^ canonicalPiece) & (1u << (j - 2));
+                        mask ^= mask << 1;
+                        canonicalPiece ^= mask;
+                        j--;
+                    } while (encodedPos[j - 1] < tmp);
+
+                    encodedPos[j] = tmp;
+                } 
+            }
+            return canonicalPiece;
+        }
+
+        static int Compare(Span<uint> encodedPos0, Span<uint> encodedPos1)
+        {
+            for(var i = 1; i < 5; i++)
+            {
+                if(encodedPos0[i] == encodedPos1[i])
+                    continue;
+                return (encodedPos0[i] < encodedPos1[i]) ? -1 : 1;
+            }
+            return 0;
+        }
     }
 
     public void Rotate() => Transform(ROTATE);
@@ -475,28 +544,30 @@ public struct Position
 
     public readonly bool SymmetricalEquals(ref Position pos)
     {
-        foreach(var equivPos in EnumerateEquivalentPositions())
+        foreach(var equivPos in GetEquivalentPositions())
             if(equivPos == pos)
                 return true;
         return false;
     }
 
-    public readonly IEnumerable<Position> EnumerateEquivalentPositions()
+    public readonly unsafe Position[] GetEquivalentPositions()
     {
-        const ulong MASK = 0xffff;
+        var equivPositions = new Position[24 * 16 * 32];
+        var count = 0;
 
         int[] permutation = [0, 1, 2, 3];
         do
         {
-            var propReorderedPos = new Position { pieces = this.pieces};
+            var propReorderedPos = new Position { PieceToBePut = 0u };
             for (var i = 0; i < 4; i++)
             {
-                propReorderedPos.lightHollowTallRound |= ((this.lightHollowTallRound >> NUM_SQUARES * permutation[i]) & MASK) << NUM_SQUARES * i;
-                propReorderedPos.darkSolidShortSquare |= ((this.darkSolidShortSquare >> NUM_SQUARES * permutation[i]) & MASK) << NUM_SQUARES * i;
+                propReorderedPos.lightHollowTallRound[i] = this.lightHollowTallRound[permutation[i]];
+                propReorderedPos.darkSolidShortSquare[i] = this.darkSolidShortSquare[permutation[i]];
+                propReorderedPos.PieceToBePut |= (PieceProperty)((((uint)this.PieceToBePut >> permutation[i]) & 1) << i);
             }
 
-            Debug.Assert(BitOperations.PopCount(propReorderedPos.lightHollowTallRound) == BitOperations.PopCount(this.lightHollowTallRound));
-            Debug.Assert(BitOperations.PopCount(propReorderedPos.darkSolidShortSquare) == BitOperations.PopCount(this.darkSolidShortSquare));
+            if(this.PieceToBePut == PieceProperty.Null)
+                propReorderedPos.PieceToBePut = PieceProperty.Null;
 
             for(var bits0 = 0; bits0 < 16; bits0++)
             {
@@ -506,16 +577,13 @@ public struct Position
                     var mask = 1 << i;
                     if((bits0 & mask) != 0)
                     {
-                        var extractor = MASK << (NUM_SQUARES * i);
-                        var remover = ~extractor;
-                        var tmp0 = propFlippedPos.lightHollowTallRound & extractor;
-                        var tmp1 = propFlippedPos.darkSolidShortSquare & extractor;
-                        propFlippedPos.lightHollowTallRound &= remover;
-                        propFlippedPos.lightHollowTallRound |= tmp0;
-                        propFlippedPos.darkSolidShortSquare &= remover;
-                        propFlippedPos.darkSolidShortSquare |= tmp1;
+                        (propFlippedPos.lightHollowTallRound[i], propFlippedPos.darkSolidShortSquare[i]) = (propFlippedPos.darkSolidShortSquare[i], propFlippedPos.lightHollowTallRound[i]);
+                        propFlippedPos.PieceToBePut ^= (PieceProperty)mask;
                     }
                 }
+
+                if(this.PieceToBePut == PieceProperty.Null)
+                    propFlippedPos.PieceToBePut = PieceProperty.Null;
 
                 for(var rotCount = 0; rotCount < 4; rotCount++)
                 {
@@ -523,9 +591,10 @@ public struct Position
                     for(var i = 0; i < rotCount; i++)
                         rotatedPos.Rotate();
 
-                    var transformedPos = rotatedPos;
                     for(var bits1 = 0; bits1 < 8; bits1++)
                     {
+                        var transformedPos = rotatedPos;
+
                         if((bits1 & 1) != 0)
                             transformedPos.Mirror();
 
@@ -535,22 +604,30 @@ public struct Position
                         if((bits1 & (1 << 2)) != 0)
                             transformedPos.ApplyInsideOut();
 
-                        yield return transformedPos;
+                        equivPositions[count++] = transformedPos;
                     }
                 }
             }
         } while (Permutation.Next(permutation.AsSpan()));
+
+        return equivPositions;
     }
 
     public override readonly string ToString()
     {
         var sb = new StringBuilder();
-        Print(this.lightHollowTallRound, ["Light", "Hollow", "Tall", "Round"]);
+
+        fixed(ushort* lhtr = this.lightHollowTallRound)
+            Print(lhtr, ["Light", "Hollow", "Tall", "Round"]);
+
         sb.AppendLine();
-        Print(this.darkSolidShortSquare, ["Dark", "Solid", "Short", "Square"]);
+
+        fixed(ushort* dsss = this.darkSolidShortSquare)
+            Print(dsss, ["Dark", "Solid", "Short", "Square"]);
+
         return sb.ToString();
 
-        void Print(ulong patterns, string[] labels)
+        void Print(ushort* patterns, string[] labels)
         {
             for(var y = 0; y < BOARD_SIZE; y++)
             {
@@ -563,10 +640,10 @@ public struct Position
 
                 for(var i = 0; i < 4; i++)
                 {
-                    var mask = 1UL << ((NUM_SQUARES * i) + BOARD_SIZE * y);
+                    var mask = 1 << (BOARD_SIZE * y);
                     for(var x = 0; x < BOARD_SIZE; x++)
                     {
-                        if((patterns & mask) != 0)
+                        if((patterns[i] & mask) != 0)
                             sb.Append('*');
                         else
                             sb.Append('-');
@@ -582,17 +659,18 @@ public struct Position
 
     void Transform(ushort[] transformer)
     {
-        this.pieces = transformer[this.pieces];
-        var patterns0 = 0UL;
-        var patterns1 = 0UL;
         for(var i = 0; i < 4; i++)
         {
-            var pattern0 = (ulong)transformer[(this.lightHollowTallRound >> (NUM_SQUARES * i)) & 0xffff];
-            var pattern1 = (ulong)transformer[(this.darkSolidShortSquare >> (NUM_SQUARES * i)) & 0xffff];
-            patterns0 |= pattern0 << (NUM_SQUARES * i);
-            patterns1 |= pattern1 << (NUM_SQUARES * i);
+            this.lightHollowTallRound[i] = transformer[this.lightHollowTallRound[i]];
+            this.darkSolidShortSquare[i] = transformer[this.darkSolidShortSquare[i]];
         }
-        this.lightHollowTallRound = patterns0;
-        this.darkSolidShortSquare = patterns1;
+    }
+
+    static bool AreEqual(ushort* patterns0, ushort* patterns1)
+    {
+        return patterns0[0] == patterns1[0]
+            && patterns0[1] == patterns1[1]
+            && patterns0[2] == patterns1[2]
+            && patterns0[3] == patterns1[3];
     }
 }

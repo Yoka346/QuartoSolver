@@ -12,7 +12,7 @@ static class CanonizeTest
     static readonly Dictionary<CanonicalPosition, Position> TT = [];
     static ulong NodeCount;
 
-    public static void TestMain(int maxDepth, int initialMoveCount)
+    public static void CollisionTest(int maxDepth, int initialMoveCount)
     {
         NodeCount = 0UL;
         (var pos, var pieces, var empties) = CreateInitialPosition(initialMoveCount);
@@ -22,6 +22,63 @@ static class CanonizeTest
             TT.Clear();
             Search(ref pos, ref pieces, ref empties, depth);
             Console.WriteLine($"{NodeCount} nodes");
+        }
+    }
+
+    public static void HitTest(int initialMoveCount)
+    {
+        for(var i = 0; i < 10000; i++)
+        {
+            Console.WriteLine(i);
+            (var pos, var pieces, var empties) = CreateInitialPosition(initialMoveCount);
+
+            while(!pos.IsQuarto && pieces.Count != 0)
+            {
+                var pieceIdx = Random.Shared.Next(pieces.Count);
+                PieceProperty piece = pieces.GetNext();
+                var count = 1;
+                while(count <= pieceIdx)
+                {
+                    piece = pieces.GetNext(piece);
+                    count++;
+                }
+                pieces.Remove(piece);
+
+                var emptyIdx = Random.Shared.Next(empties.Count);
+                var coord = empties.GetNext();
+                count = 1;
+                while(count <= emptyIdx)
+                {
+                    coord = empties.GetNext(coord);
+                    count++;
+                }
+                empties.Remove(coord);
+
+                Test(pos);
+
+                pos.PieceToBePut = piece;
+                pos.Update(coord);
+            }
+        }
+
+        static void Test(Position pos)
+        {
+            pos.GetCanonicalPosition(out var canPos);
+            Debug.Assert(pos.GetCanonicalPosition() == canPos);
+
+            foreach(var equivPos in pos.GetEquivalentPositions())
+            {
+                equivPos.GetCanonicalPosition(out var equivCanPos);
+                Debug.Assert(equivPos.GetCanonicalPosition() == equivCanPos);
+                if(equivCanPos != canPos)
+                {
+                    Console.WriteLine($"{pos}\nPiece: {pos.PieceToBePut}\n");
+                    Console.WriteLine($"{equivPos}\nPiece: {equivPos.PieceToBePut}\n");
+                    Console.WriteLine(canPos);
+                    Console.WriteLine(equivCanPos);
+                    Debug.Assert(false);
+                }
+            }
         }
     }
 
@@ -41,6 +98,7 @@ static class CanonizeTest
                 count++;
             }
             pieces.Remove(piece);
+            pos.PieceToBePut = piece;
 
             var emptyIdx = Random.Shared.Next(empties.Count);
             var coord = empties.GetNext();
@@ -52,7 +110,7 @@ static class CanonizeTest
             }
             empties.Remove(coord);
 
-            pos.Update(piece, coord);
+            pos.Update(coord);
         }
         return (pos, pieces, empties);
     }
@@ -78,12 +136,13 @@ static class CanonizeTest
         while((piece = pieces.GetNext(piece)) != PieceProperty.Default)
         {
             pieces.Remove(piece);
+            pos.PieceToBePut = piece;
             var coord = -1;
             var prevCoord = coord;
             while((coord = empties.GetNext(coord)) != -1)
             {
                 empties.Remove(coord);
-                pos.Update(piece, coord);
+                pos.Update(coord);
 
                 Search(ref pos, ref pieces, ref empties, depth - 1);
 
