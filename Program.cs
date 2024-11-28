@@ -11,16 +11,14 @@ namespace Quarto;
 
 static class Program
 {
-    static void Main()
+    static void Main(string[] args)
     {
-        var searcher = new Searcher();
-        searcher.SetRoot(new Position(), new PieceList(), new LinkedList16());
-        SearchResult res = new();
+        const ulong DEFAULT_TT_SIZE = 8UL * 1024 * 1024 * 1024;
 
-        var task = Task.Run(() => 
-        {
-            res = searcher.Search();
-        });
+        var searcher = new Searcher(args.Length == 0 ? DEFAULT_TT_SIZE : ulong.Parse(args[0]) * 1024 * 1024);
+        searcher.SetRoot(new Position(), new PieceList(), new LinkedList16());
+
+        var task = Task.Run(() => searcher.Search(32));
 
         while(!task.IsCompleted)
         {
@@ -28,6 +26,7 @@ static class Program
             Thread.Sleep(10000);
         }
 
+        var res = task.Result;
         Console.WriteLine($"Score: {res.EvalScore}");
         Console.WriteLine($"NodeCount: {res.NodeCount}");
         Console.WriteLine($"Ellapsed: {res.EllapsedMs}[ms]");

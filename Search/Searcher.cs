@@ -3,151 +3,141 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Data;
 using System.Runtime.Serialization;
+using Microsoft.VisualBasic;
 using Quarto.Game;
 
 namespace Quarto.Search;
 
-public readonly struct SearchResult 
+public readonly struct SearchResult(Move bestMove, int evalScore, int depth, long nodeCount, int ellpasedMs)
 {
-    public Move BestMove { get; }
-    public int EvalScore { get; }
-    public int Depth { get; }
-    public long NodeCount { get; }
-    public int EllapsedMs { get; }
-
-    public SearchResult(Move bestMove, int evalScore, int depth, long nodeCount, int ellpasedMs)
-    {
-        this.BestMove = bestMove;
-        this.EvalScore = evalScore;
-        this.Depth = depth;
-        this.NodeCount = nodeCount;
-        this.EllapsedMs = ellpasedMs;
-    }
+    public Move BestMove { get; } = bestMove;
+    public int EvalScore { get; } = evalScore;
+    public int Depth { get; } = depth;
+    public long NodeCount { get; } = nodeCount;
+    public int EllapsedMs { get; } = ellpasedMs;
 }
 
-class Searcher
+class Searcher(ulong ttSizeBytes)
 {
-    const int SCORE_INF = short.MaxValue;
-    const int SCORE_MATE = SCORE_INF;
+    const int SCORE_MATE = sbyte.MaxValue;
     const int SCORE_INVALID = int.MaxValue;
-    const int SHALLOW_DEPTH = 5;
+    const int WITHOUT_TT_EMPTY_COUNT = 5;
 
     public long NodeCount { get; private set; }
 
-    Position rootPos;
-    PieceList rootPieces;
-    LinkedList16 rootEmpties;
-    readonly Dictionary<CanonicalPosition, TTEntry> tt;
-
-    public Searcher()
-    {
-        this.tt = [];
-    }
+    SearchState rootState;
+    readonly TranspositionTable tt = new(ttSizeBytes);
 
     public void SetRoot(Position pos, PieceList pieces, LinkedList16 empties)
     {
-        this.rootPos = pos;
-        this.rootPieces = pieces;
-        this.rootEmpties = empties;
+        this.rootState = new SearchState(pos, pieces, empties);
         this.tt.Clear();
     }
 
-    public SearchResult Search()
+    public SearchResult Search(int depth)
     {
-        Move bestMove;
         this.NodeCount = 0L;
         var startMs = Environment.TickCount;
-        (var pos, var pieces, var empties) = (this.rootPos, this.rootPieces, this.rootEmpties);
-        var score = SearchChoiceNode(ref pos, ref pieces, ref empties, 1, -SCORE_INF, SCORE_INF);
+        var state = this.rootState;
+        var score = SearchChoiceNode(ref state, -SCORE_MATE, SCORE_MATE, depth);
         var endMs = Environment.TickCount;
         return new SearchResult(default, score, 0, this.NodeCount, endMs - startMs);
     }
 
-    public int SearchChoiceNode(ref Position pos, ref PieceList pieces, ref LinkedList16 empties, int sideToMove, int alpha, int beta)
+    int SearchChoiceNode(ref SearchState state, int alpha, int beta, int depth)
     {
-        if(empties.Count == 0)
+        if(state.Empties.Count == 0 || depth == 0)
             return 0;
 
-        if(pos.IsQuarto)
-            return -SCORE_MATE;
+        state.Pos.GetCanonicalPosition(out var canPos);
+        (var lower, var upper) = GetScoreRange(ref state, ref canPos);
 
-        var prevChoice = pos.PieceToBePut;
+        if(upper <= alpha)
+            return upper;
+        
+        if(lower >= beta || lower == upper)
+            return lower;
+
+        alpha = Math.Max(alpha, lower);
+        beta = Math.Min(beta, upper);
+
+        var prevChoice = state.Pos.Piece;
         var piece = PieceProperty.Default;
         var prevPiece = piece;
-        while((piece = pieces.GetNext(piece)) != PieceProperty.Default)
+        while((piece = state.Pieces.GetNext(piece)) != PieceProperty.Default)
         {
-            pieces.Remove(piece);
-            pos.PieceToBePut = piece;
+            state.Pieces.Remove(piece);
+            state.Pos.Piece = piece;
             this.NodeCount++;
 
-            alpha = Math.Max(alpha, -SearchPutNode(ref pos, ref pieces, ref empties, -sideToMove, -beta, -alpha));
+            alpha = Math.Max(alpha, -SearchPutNode(ref state, -beta, -alpha, depth - 1));
 
-            pieces.AddAfter(prevPiece, piece);
+            state.Pieces.AddAfter(prevPiece, piece);
             prevPiece = piece;
 
             if(alpha >= beta)
             {
-                pos.PieceToBePut = prevChoice;
+                state.Pos.Piece = prevChoice;
                 return alpha;
             }
         }
 
-        pos.PieceToBePut = prevChoice;
+        state.Pos.Piece = prevChoice;
         return alpha;
     }
 
-    public int SearchPutNode(ref Position pos, ref PieceList pieces, ref LinkedList16 empties, int sideToMove, int alpha, int beta)
+    int SearchPutNode(ref SearchState state, int alpha, int beta, int depth)
     {
-        if(empties.Count > SHALLOW_DEPTH)
-            return SearchPutNodeWithTT(ref pos, ref pieces, ref empties, sideToMove, alpha, beta);
+        if(state.Empties.Count > WITHOUT_TT_EMPTY_COUNT)
+            return SearchPutNodeWithTT(ref state, alpha, beta, depth);
         else
-            return SearchPutNodeWithoutTT(ref pos, ref pieces, ref empties, sideToMove, alpha, beta);
+            return SearchPutNodeWithoutTT(ref state, alpha, beta, depth);
     }
 
-    public int SearchPutNodeWithTT(ref Position pos, ref PieceList pieces, ref LinkedList16 empties, int sideToMove, int alpha, int beta)
+    int SearchPutNodeWithTT(ref SearchState state, int alpha, int beta, int depth)
     {
-        var canPos = pos.GetCanonicalPosition();
-        if(this.tt.TryGetValue(canPos, out var entry))
+        if(SearchMateInOneMove(ref state))
+            return SCORE_MATE;
+
+        if(depth == 0)
+            return 0;
+
+        state.Pos.GetCanonicalPosition(out var canPos);
+        ref var entry = ref this.tt.GetEntry(ref canPos, out var hit);
+
+        if(hit)
         {
             var lower = entry.Lower;
             var upper = entry.Upper;
-            var ret = SCORE_INVALID;
-            if(alpha >= upper)
-                ret = upper;
-            else if(beta <= lower)
-                ret = lower;
-            else if(lower == upper)
-                ret = lower;
 
-            if(ret != SCORE_INVALID)
-                return ret;
+            if(alpha >= upper)
+                return upper;
+            
+            if(beta <= lower || lower == upper)
+                return lower;
 
             alpha = Math.Max(alpha, lower);
             beta = Math.Min(beta, upper);
         }
 
-        int maxScore = -SCORE_INF, score, a = alpha;
+        int maxScore = -SCORE_MATE, score, a = alpha;
         var coord = -1;
         var prevCoord = coord;
-        while((coord = empties.GetNext(coord)) != -1)
+        while((coord = state.Empties.GetNext(coord)) != -1)
         {
-            empties.Remove(coord);
-            pos.Update(coord);
+            state.Empties.Remove(coord);
+            state.Pos.Update(coord);
             this.NodeCount++;
 
-            score = SearchChoiceNode(ref pos, ref pieces, ref empties, sideToMove, a, beta);
+            score = SearchChoiceNode(ref state, a, beta, depth - 1);
 
-            pos.Undo(pos.PieceToBePut, coord);
-            empties.AddAfter(prevCoord, coord);
+            state.Pos.Undo(state.Pos.Piece, coord);
+            state.Empties.AddAfter(prevCoord, coord);
             prevCoord = coord;
 
             if(score >= beta)
             {
-                this.tt[canPos] = new TTEntry
-                {
-                    Lower = (short)score,
-                    Upper = SCORE_INF
-                };
+                TranspositionTable.SaveAt(ref entry, ref canPos, score, SCORE_MATE, depth);
                 return score;
             }
 
@@ -162,39 +152,34 @@ class Searcher
         }
 
         if(maxScore >= alpha)
-        {
-            this.tt[canPos] = new TTEntry
-            {
-                Lower = (short)maxScore,
-                Upper = (short)maxScore
-            };
-        }
+            TranspositionTable.SaveAt(ref entry, ref canPos, maxScore, maxScore, depth);
         else
-        {
-            this.tt[canPos] = new TTEntry
-            {
-                Lower = -SCORE_INF,
-                Upper = (short)maxScore
-            };
-        }
+            TranspositionTable.SaveAt(ref entry, ref canPos, -SCORE_MATE, maxScore, depth);
 
         return maxScore;
     }
 
-    public int SearchPutNodeWithoutTT(ref Position pos, ref PieceList pieces, ref LinkedList16 empties, int sideToMove, int alpha, int beta)
+    int SearchPutNodeWithoutTT(ref SearchState state, int alpha, int beta, int depth)
     {
-        int maxScore = -SCORE_INF, score, a = alpha;
+        if(SearchMateInOneMove(ref state))
+            return SCORE_MATE;
+
+        if(depth == 0)
+            return 0;
+
+        int maxScore = -SCORE_MATE, score, a = alpha;
         var coord = -1;
         var prevCoord = coord;
-        while((coord = empties.GetNext(coord)) != -1)
+        while((coord = state.Empties.GetNext(coord)) != -1)
         {
-            empties.Remove(coord);
-            pos.Update(coord);
+            state.Empties.Remove(coord);
+            state.Pos.Update(coord);
+            this.NodeCount++;
 
-            score = SearchChoiceNode(ref pos, ref pieces, ref empties, sideToMove, a, beta);
+            score = SearchChoiceNode(ref state, a, beta, depth - 1);
 
-            pos.Undo(pos.PieceToBePut, coord);
-            empties.AddAfter(prevCoord, coord);
+            state.Pos.Undo(state.Pos.Piece, coord);
+            state.Empties.AddAfter(prevCoord, coord);
             prevCoord = coord;
 
             if(score >= beta)
@@ -211,5 +196,50 @@ class Searcher
         }
 
         return maxScore;
+    }
+
+    (int lower, int upper) GetScoreRange(ref SearchState state, ref CanonicalPosition pos)
+    {
+        var prevChoice = state.Pos.Piece;
+        (var lower, var upper) = (-SCORE_MATE, -SCORE_MATE);
+        var piece = PieceProperty.Default;
+        while((piece = state.Pieces.GetNext(piece)) != PieceProperty.Default)
+        {
+            state.Pos.Piece = piece;
+
+            ref var entry = ref this.tt.GetEntry(ref pos, out var hit);
+            if(hit)
+            {
+                lower = Math.Max(lower, -entry.Upper);
+                upper = Math.Max(upper, -entry.Lower);
+            }
+            else
+                upper = SCORE_MATE;
+        }
+
+        state.Pos.Piece = prevChoice;
+        return (lower, upper);
+    }
+
+    static bool SearchMateInOneMove(ref SearchState state)
+    {
+        var coord = -1;
+        while((coord = state.Empties.GetNext(coord)) != -1)
+        {
+            state.Pos.Update(coord);
+            var isQuarto = state.Pos.IsQuarto;
+            state.Pos.Undo(state.Pos.Piece, coord);
+
+            if(isQuarto)
+                return true;
+        }
+        return false;
+    }
+
+    struct SearchState(Position pos, PieceList pieces, LinkedList16 empties)
+    {
+        public Position Pos = pos;
+        public PieceList Pieces = pieces;
+        public LinkedList16 Empties = empties;
     }
 }

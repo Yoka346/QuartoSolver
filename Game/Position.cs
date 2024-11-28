@@ -168,18 +168,20 @@ public unsafe struct CanonicalPosition
         }
     }
 
-    public static bool operator==(CanonicalPosition lhs, CanonicalPosition rhs)
-    {
-        return lhs.values[0] == rhs.values[0]
-            && lhs.values[1] == rhs.values[1]
-            && lhs.values[2] == rhs.values[2]
-            && lhs.values[3] == rhs.values[3]
-            && lhs.values[4] == rhs.values[4];
-    }
+    public static bool operator==(CanonicalPosition lhs, CanonicalPosition rhs) => lhs.EqualsTo(ref rhs);
 
     public static bool operator!=(CanonicalPosition lhs, CanonicalPosition rhs) => !(lhs == rhs);
 
-    public readonly ulong CalcHashCode()
+    public readonly bool EqualsTo(ref CanonicalPosition rhs)
+    {
+        return this.values[0] == rhs.values[0]
+            && this.values[1] == rhs.values[1]
+            && this.values[2] == rhs.values[2]
+            && this.values[3] == rhs.values[3]
+            && this.values[4] == rhs.values[4];
+    }
+
+    public readonly ulong ComputeHashCode()
     {
         if(!Sse42.IsSupported && !Crc32.IsSupported)
         {
@@ -206,7 +208,7 @@ public unsafe struct CanonicalPosition
 
     public override readonly int GetHashCode()
     {
-        var hash = (int)CalcHashCode();
+        var hash = (int)ComputeHashCode();
 
 #if DEBUG
         if(HashAndCanPos.TryGetValue(hash, out var canPosList))
@@ -286,7 +288,7 @@ public unsafe struct Position
                                     || IS_QUARTO[this.darkSolidShortSquare[2]]
                                     || IS_QUARTO[this.darkSolidShortSquare[3]];
 
-    public PieceProperty PieceToBePut { get; set; } = PieceProperty.Null;
+    public PieceProperty Piece { get; set; } = PieceProperty.Null;
 
     fixed ushort lightHollowTallRound[4];
     fixed ushort darkSolidShortSquare[4];
@@ -352,7 +354,7 @@ public unsafe struct Position
             this.lightHollowTallRound[i] = this.darkSolidShortSquare[i] = 0;
     }
 
-    public static bool operator==(Position lhs, Position rhs) => lhs.PieceToBePut == rhs.PieceToBePut 
+    public static bool operator==(Position lhs, Position rhs) => lhs.Piece == rhs.Piece 
                                                               && AreEqual(lhs.lightHollowTallRound, rhs.lightHollowTallRound) 
                                                               && AreEqual(lhs.darkSolidShortSquare, rhs.darkSolidShortSquare);
 
@@ -377,7 +379,7 @@ public unsafe struct Position
 
     public void Update(int coord)
     {
-        var piece = this.PieceToBePut;
+        var piece = this.Piece;
         this.lightHollowTallRound[0] |= (ushort)((uint)(piece & PieceProperty.Color) << coord);
         this.lightHollowTallRound[1] |= (ushort)(((uint)(piece & PieceProperty.Hollow) << coord) >> 1);
         this.lightHollowTallRound[2] |= (ushort)(((uint)(piece & PieceProperty.Height) << coord) >> 2);
@@ -439,7 +441,7 @@ public unsafe struct Position
         Span<uint> minEncodedPos = [uint.MaxValue, uint.MaxValue, uint.MaxValue, uint.MaxValue, uint.MaxValue];
         var minCanonicalPiece = uint.MaxValue;
 
-        var pieceToBePut = (uint)this.PieceToBePut;
+        var pieceToBePut = (uint)this.Piece;
 
         for(var rotCount = 0; rotCount < 4; rotCount++)
         {
@@ -563,16 +565,16 @@ public unsafe struct Position
         int[] permutation = [0, 1, 2, 3];
         do
         {
-            var propReorderedPos = new Position { PieceToBePut = 0u };
+            var propReorderedPos = new Position { Piece = 0u };
             for (var i = 0; i < 4; i++)
             {
                 propReorderedPos.lightHollowTallRound[i] = this.lightHollowTallRound[permutation[i]];
                 propReorderedPos.darkSolidShortSquare[i] = this.darkSolidShortSquare[permutation[i]];
-                propReorderedPos.PieceToBePut |= (PieceProperty)((((uint)this.PieceToBePut >> permutation[i]) & 1) << i);
+                propReorderedPos.Piece |= (PieceProperty)((((uint)this.Piece >> permutation[i]) & 1) << i);
             }
 
-            if(this.PieceToBePut == PieceProperty.Null)
-                propReorderedPos.PieceToBePut = PieceProperty.Null;
+            if(this.Piece == PieceProperty.Null)
+                propReorderedPos.Piece = PieceProperty.Null;
 
             for(var bits0 = 0; bits0 < 16; bits0++)
             {
@@ -583,12 +585,12 @@ public unsafe struct Position
                     if((bits0 & mask) != 0)
                     {
                         (propFlippedPos.lightHollowTallRound[i], propFlippedPos.darkSolidShortSquare[i]) = (propFlippedPos.darkSolidShortSquare[i], propFlippedPos.lightHollowTallRound[i]);
-                        propFlippedPos.PieceToBePut ^= (PieceProperty)mask;
+                        propFlippedPos.Piece ^= (PieceProperty)mask;
                     }
                 }
 
-                if(this.PieceToBePut == PieceProperty.Null)
-                    propFlippedPos.PieceToBePut = PieceProperty.Null;
+                if(this.Piece == PieceProperty.Null)
+                    propFlippedPos.Piece = PieceProperty.Null;
 
                 for(var rotCount = 0; rotCount < 4; rotCount++)
                 {

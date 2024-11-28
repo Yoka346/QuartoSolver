@@ -60,7 +60,7 @@ static class CanonizeTest
 
                 Test(pos);
 
-                pos.PieceToBePut = piece;
+                pos.Piece = piece;
                 pos.Update(coord);
             }
         }
@@ -76,8 +76,8 @@ static class CanonizeTest
                 Debug.Assert(equivPos.GetCanonicalPosition() == equivCanPos);
                 if(equivCanPos != canPos)
                 {
-                    Console.WriteLine($"{pos}\nPiece: {pos.PieceToBePut}\n");
-                    Console.WriteLine($"{equivPos}\nPiece: {equivPos.PieceToBePut}\n");
+                    Console.WriteLine($"{pos}\nPiece: {pos.Piece}\n");
+                    Console.WriteLine($"{equivPos}\nPiece: {equivPos.Piece}\n");
                     Console.WriteLine(canPos);
                     Console.WriteLine(equivCanPos);
                     Debug.Assert(false);
@@ -102,7 +102,7 @@ static class CanonizeTest
                 count++;
             }
             pieces.Remove(piece);
-            pos.PieceToBePut = piece;
+            pos.Piece = piece;
 
             var emptyIdx = Random.Shared.Next(empties.Count);
             var coord = empties.GetNext();
@@ -140,7 +140,7 @@ static class CanonizeTest
         while((piece = pieces.GetNext(piece)) != PieceProperty.Default)
         {
             pieces.Remove(piece);
-            pos.PieceToBePut = piece;
+            pos.Piece = piece;
             var coord = -1;
             var prevCoord = coord;
             while((coord = empties.GetNext(coord)) != -1)
